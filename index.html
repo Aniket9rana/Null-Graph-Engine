@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Null Graph Engine</title>
+    <meta name="description" content="A high-performance WebGPU 3D scene editor built on the Null Graph Engine.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --bg:            #080a10;
+        --surface:       rgba(13, 15, 24, 0.88);
+        --surface-hover: rgba(255,255,255,0.04);
+        --border:        rgba(255, 255, 255, 0.07);
+        --border-active: rgba(110, 142, 255, 0.5);
+        --accent:        #6e8eff;
+        --accent-dim:    rgba(110, 142, 255, 0.25);
+        --accent-warm:   #ff8b5a;
+        --accent-green:  #4ade80;
+        --red:           #f87171;
+        --text1:         rgba(255, 255, 255, 0.92);
+        --text2:         rgba(255, 255, 255, 0.45);
+        --text3:         rgba(255, 255, 255, 0.22);
+        --topbar-h:      42px;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      body {
+        overflow: hidden;
+        background: var(--bg);
+        font-family: 'Inter', -apple-system, sans-serif;
+        color: var(--text1);
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+
+      canvas {
+        display: block;
+        position: fixed;
+        top: var(--topbar-h); left: 0; right: 0; bottom: 0;
+        width: 100%;
+        height: calc(100% - var(--topbar-h));
+        z-index: 0;
+      }
+
+      /* ══════ TOP BAR ══════════════════════════════════════════ */
+      #topbar {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        height: var(--topbar-h);
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        backdrop-filter: blur(20px);
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        gap: 8px;
+        z-index: 50;
+      }
+
+      .logo-text {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        background: linear-gradient(135deg, var(--accent), #b4a0ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-right: 10px;
+      }
+
+      .top-divider {
+        width: 1px; height: 22px;
+        background: var(--border);
+        margin: 0 4px;
+      }
+
+      .top-btn {
+        display: flex; align-items: center; gap: 6px;
+        padding: 5px 10px;
+        border-radius: 6px;
+        font-size: 11.5px;
+        color: var(--text2);
+        cursor: pointer;
+        border: none;
+        background: transparent;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .top-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+      .top-btn:hover { background: var(--surface-hover); color: var(--text1); }
+      .top-btn.primary { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--border-active); }
+      .top-btn.primary:hover { background: rgba(110, 142, 255, 0.35); }
+
+      .top-spacer { flex: 1; }
+
+      .fps-badge {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: var(--accent-green);
+        background: rgba(74, 222, 128, 0.1);
+        border: 1px solid rgba(74, 222, 128, 0.2);
+        padding: 3px 8px;
+        border-radius: 4px;
+        letter-spacing: 0.5px;
+      }
+
+      /* ══════ OVERLAY (stacked on canvas) ══════════════════════ */
+      #ui {
+        position: fixed;
+        top: var(--topbar-h); left: 0; right: 0; bottom: 0;
+        pointer-events: none;
+        z-index: 10;
+      }
+
+      #ui > * { pointer-events: auto; }
+
+      /* ══════ FLOATING PANELS ══════════════════════════════════ */
+      .panel {
+        background: var(--surface);
+        backdrop-filter: blur(28px) saturate(140%);
+        -webkit-backdrop-filter: blur(28px) saturate(140%);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+        transition: transform 0.25s cubic-bezier(0.16,1,0.3,1);
+        position: absolute;
+      }
+
+      .panel:hover { transform: translateY(-1px); }
+
+      .panel-title {
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: 1.8px;
+        text-transform: uppercase;
+        color: var(--text3);
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .panel-title .dot {
+        width: 5px; height: 5px;
+        border-radius: 50%;
+      }
+
+      /* ── Stats (top-left) ─────────────────────────────────── */
+      #stats-panel {
+        top: 14px; left: 14px;
+        min-width: 178px;
+        animation: slideIn 0.4s 0.1s both;
+      }
+
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.03);
+      }
+
+      .stat-row:last-child { border-bottom: none; }
+
+      .stat-label {
+        font-size: 11px;
+        color: var(--text2);
+        display: flex; align-items: center; gap: 6px;
+      }
+
+      .stat-label svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+      .stat-value {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        color: var(--accent);
+      }
+
+      .stat-value.good { color: var(--accent-green); }
+      .stat-value.warn { color: #facc15; }
+      .stat-value.bad  { color: var(--red); }
+
+      /* ── Camera Info (bottom-left) ─────────────────────────── */
+      #camera-panel {
+        bottom: 14px; left: 14px;
+        min-width: 200px;
+        animation: slideIn 0.4s 0.2s both;
+      }
+
+      /* ── Editor Sidebar (right) ────────────────────────────── */
+      #editor-panel {
+        top: 14px; right: 14px;
+        width: 256px;
+        animation: slideIn 0.4s 0.15s both;
+      }
+
+      .panel-subtitle {
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 1.4px;
+        text-transform: uppercase;
+        color: var(--text3);
+        margin: 10px 0 6px;
+      }
+
+      /* Scene List */
+      #scene-list {
+        min-height: 80px;
+        max-height: 180px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: rgba(0,0,0,0.2);
+        padding: 3px;
+        margin-bottom: 10px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255,255,255,0.1) transparent;
+      }
+
+      .scene-item {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 8px;
+        font-size: 11px;
+        cursor: pointer;
+        border-radius: 5px;
+        color: var(--text2);
+        transition: background 0.12s, color 0.12s;
+      }
+
+      .scene-item svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
+      .scene-item:hover { background: var(--surface-hover); color: var(--text1); }
+
+      .scene-item.active {
+        background: var(--accent-dim);
+        color: var(--accent);
+        border: 1px solid var(--border-active);
+      }
+
+      /* Transform Editor */
+      #transform-editor {
+        border-top: 1px solid var(--border);
+        padding-top: 12px;
+        display: none;
+      }
+
+      #transform-empty {
+        font-size: 11px;
+        color: var(--text3);
+        text-align: center;
+        padding: 18px 0 6px;
+      }
+
+      .transform-grid {
+        display: grid;
+        grid-template-columns: 30px 1fr 1fr 1fr;
+        gap: 4px;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+
+      .transform-label {
+        font-size: 9px;
+        font-weight: 600;
+        color: var(--text3);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .transform-input {
+        background: rgba(0,0,0,0.3);
+        border: 1px solid var(--border);
+        color: var(--text1);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10.5px;
+        padding: 4px 5px;
+        border-radius: 4px;
+        width: 100%;
+        outline: none;
+        text-align: center;
+        transition: border-color 0.15s;
+      }
+
+      .transform-input:focus { border-color: var(--accent); }
+
+      .color-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      
+      .color-row label { font-size: 10px; color: var(--text2); }
+      
+      input[type="color"] {
+        -webkit-appearance: none;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        width: 26px; height: 26px;
+        cursor: pointer;
+        background: transparent;
+        padding: 2px;
+      }
+
+      input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+      input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
+
+      .delete-btn {
+        margin-top: 10px;
+        width: 100%;
+        padding: 6px;
+        background: rgba(248,113,113,0.08);
+        border: 1px solid rgba(248,113,113,0.25);
+        color: var(--red);
+        border-radius: 5px;
+        font-size: 10.5px;
+        cursor: pointer;
+        transition: background 0.15s;
+        display: flex; align-items: center; justify-content: center; gap: 5px;
+      }
+
+      .delete-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+      .delete-btn:hover { background: rgba(248,113,113,0.18); }
+
+      /* ══════ DROP ZONE ════════════════════════════════════════ */
+      #dropzone {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(110, 142, 255, 0.12);
+        border: 3px dashed var(--accent);
+        z-index: 100;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 12px;
+        color: white;
+        font-size: 20px;
+        font-weight: 600;
+        pointer-events: none;
+        backdrop-filter: blur(6px);
+      }
+
+      #dropzone svg { width: 40px; height: 40px; stroke: var(--accent); fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+      #dropzone .dz-sub { font-size: 12px; font-weight: 400; color: var(--text2); }
+      #dropzone.active { display: flex; }
+
+      /* ══════ HINTS (bottom centre) ════════════════════════════ */
+      #hints {
+        position: absolute;
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 14px;
+        font-size: 11px;
+        color: var(--text3);
+        opacity: 0.7;
+        transition: opacity 0.3s;
+        animation: slideIn 0.4s 0.5s both;
+      }
+
+      #hints:hover { opacity: 1; }
+
+      #hints kbd {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 10px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 1px 5px;
+        margin-right: 3px;
+      }
+
+      /* ══════ ANIMATIONS ══════════════════════════════════════ */
+      @keyframes slideIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="gpu-canvas"></canvas>
+    <!-- Hidden file picker for the Import button -->
+    <input type="file" id="file-input" accept=".obj,.glb" style="display:none;">
+    <div id="dropzone">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Drop .obj or .glb to import
+      <span class="dz-sub">Supports Wavefront OBJ and GL Transmission Format Binary</span>
+    </div>
+
+    <!-- ── Top Bar ───────────────────────────────────────────── -->
+    <div id="topbar">
+      <span class="logo-text">NULL GRAPH</span>
+      <div class="top-divider"></div>
+
+      <!-- Add Object dropdown trigger -->
+      <button class="top-btn primary" id="btn-add-cube" title="Add Cube">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+        Add Cube
+      </button>
+
+      <button class="top-btn" id="btn-import" title="Import File (drag & drop supported)">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Import
+      </button>
+
+      <div class="top-spacer"></div>
+
+      <span class="fps-badge" id="stat-fps">— FPS</span>
+      &nbsp;
+      <span style="font-size:11px; color:var(--text3);" id="stat-frametime">—ms</span>
+    </div>
+
+    <!-- ── UI Layer ──────────────────────────────────────────── -->
+    <div id="ui">
+
+      <!-- Performance Panel -->
+      <div class="panel" id="stats-panel">
+        <div class="panel-title">
+          <span class="dot" style="background:var(--accent-green)"></span>
+          Performance
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">
+            <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Draw Calls
+          </span>
+          <span class="stat-value" id="stat-draws">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>Instances
+          </span>
+          <span class="stat-value" id="stat-instances">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">
+            <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Lights
+          </span>
+          <span class="stat-value" id="stat-lights">—</span>
+        </div>
+      </div>
+
+      <!-- Camera Panel -->
+      <div class="panel" id="camera-panel">
+        <div class="panel-title">
+          <span class="dot" style="background:var(--accent-warm)"></span>
+          Camera
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Distance</span>
+          <span class="stat-value" id="cam-distance">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Azimuth</span>
+          <span class="stat-value" id="cam-azimuth">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Elevation</span>
+          <span class="stat-value" id="cam-elevation">—</span>
+        </div>
+      </div>
+
+      <!-- Editor Sidebar -->
+      <div class="panel" id="editor-panel">
+        <div class="panel-title">
+          <span class="dot" style="background:var(--accent)"></span>
+          Editor
+        </div>
+
+        <div class="panel-subtitle">Scene Graph</div>
+        <div id="scene-list"></div>
+
+        <!-- Transform / Properties -->
+        <div id="transform-editor">
+          <div class="panel-subtitle">Transform</div>
+          <div class="transform-grid">
+            <span class="transform-label">Pos</span>
+            <input type="number" step="0.1" class="transform-input" id="t-px" placeholder="X">
+            <input type="number" step="0.1" class="transform-input" id="t-py" placeholder="Y">
+            <input type="number" step="0.1" class="transform-input" id="t-pz" placeholder="Z">
+          </div>
+          <div class="transform-grid">
+            <span class="transform-label">Rot°</span>
+            <input type="number" step="5" class="transform-input" id="t-rx" placeholder="X">
+            <input type="number" step="5" class="transform-input" id="t-ry" placeholder="Y">
+            <input type="number" step="5" class="transform-input" id="t-rz" placeholder="Z">
+          </div>
+          <div class="transform-grid">
+            <span class="transform-label">Scale</span>
+            <input type="number" step="0.1" class="transform-input" id="t-sx" placeholder="X">
+            <input type="number" step="0.1" class="transform-input" id="t-sy" placeholder="Y">
+            <input type="number" step="0.1" class="transform-input" id="t-sz" placeholder="Z">
+          </div>
+
+          <div class="color-row">
+            <label>Color</label>
+            <input type="color" id="t-color" value="#cccccc">
+          </div>
+
+          <button class="delete-btn" id="btn-delete">
+            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+            Delete Object
+          </button>
+        </div>
+        <div id="transform-empty">Select an object to edit</div>
+      </div>
+
+      <!-- Viewport Hints -->
+      <div id="hints">
+        <span><kbd>Drag</kbd> Orbit</span>
+        <span><kbd>Scroll</kbd> Zoom</span>
+        <span><kbd>Drop</kbd> Import</span>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
