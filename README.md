@@ -1,75 +1,100 @@
-# 🌌 Null Graph Engine v2.0
+# 🌌 Null Graph Engine `v3.0`
 
-**Null Graph Engine** is a high-performance, modular 3D graphics library and interactive scene editor built with **WebGPU**. It is designed for developers who need a professional-grade, deferred-rendering pipeline with the latest web standards.
+**Null Graph Engine** is a state-of-the-art, high-performance 3D graphics library and interactive scene editor built exclusively for the **WebGPU** era. Designed for scalability and visual excellence, it bridges the gap between raw hardware power and developer productivity.
 
-![Engine Preview](/C:/Users/anike/.gemini/antigravity/brain/137bdc2c-70bd-4bb9-93be-3f867e230cd5/final_ui_state_1774440270633.png)
+![Null Graph Engine Hero](./assets/hero.png)
 
-## ✨ Core Features
+## 💎 Core Pillars
 
-### 🚀 High-Performance Rendering
-- **Modern Deferred Shading**: Support for complex lighting scenes with thousands of lights using a 5-channel G-Buffer.
-- **WebGPU Native**: Leveraging the latest GPU API for low-overhead, multi-threaded rendering.
-- **Automatic Batching**: Transparent instancing for identical geometries to minimize draw calls.
+### ⚡ Next-Gen Performance
+*   **WebGPU-First**: Leveraging the full power of the latest GPU API for low-overhead, multi-threaded rendering.
+*   **Data-Oriented ECS**: Built on a high-performance Entity Component System (ECS) for managing thousands of objects with ease.
+*   **Job System Architecture**: Efficient CPU task distribution to keep the frame rate stable under heavy loads.
+*   **Intelligent Batching**: Transparent instance batching to reduce draw calls and maximize throughput.
 
-### 📦 Robust Asset Pipeline
-- **GLB (glTF Binary) Support**: Built-in binary parser for the industry-standard 3D format.
-- **Wavefront OBJ Support**: Fast text-based parsing for legacy and simple static meshes.
-- **Drag-and-Drop Editor**: Drop any `.obj` or `.glb` file directly into the editor to instantiate it.
+### 🎨 Visual Fidelity
+*   **Advanced Deferred Shading**: A 5+ channel G-Buffer supporting complex lighting scenarios with thousands of dynamic point and directional lights.
+*   **Compute-Driven Post-Processing**: High-fidelity effects powered by GPU Compute shaders (HDR, Tone Mapping, SSAO, SSA).
+*   **Infinite Procedural Ground**: Anti-aliased, distance-faded spatial reference grid for professional-grade editing.
+*   **Dynamic LOD System**: Automated Level of Detail scaling for massive 3D environments.
 
-### 🛠️ Integrated Scene Editor
-- **Glassmorphism UI**: A premium, responsive dark-mode HUD.
-- **Real-time Transform Editing**: Modify position, rotation, and scale with immediate GPU constant buffer synchronization.
-- **Scene Hierarchy**: Manage complex scenes via a structured tree view.
-- **Infinite Procedural Grid**: A distance-faded, anti-aliased ground grid for spatial reference.
+### 🧩 Developer Workflow
+*   **Render Graph Abstraction**: Automatic resource lifecycle management, dependency tracking, and memory reuse.
+*   **Robust Asset Pipeline**: Native support for **glTF/GLB** and **OBJ** with a high-speed binary parser.
+*   **Glassmorphism Scene Editor**: A premium, responsive dark-mode HUD with real-time transform synchronization.
+*   **Custom GPU Profiler**: Real-time breakdown of GPU timings and CPU/GPU memory usage.
+
+---
 
 ## 🏗️ Technical Architecture
 
-The engine is built around a **Render Graph** system that manages resource dependencies and minimizes GPU state changes:
+The engine is built around a **Render Graph** system that manages the entire frame lifecycle:
 
-- **Geometry Pass**: Populates the G-Buffer (Albedo, Normal, MetalRough, Velocity, Depth).
-- **Grid Pass**: Procedural overlay integrated directly into the geometry pass.
-- **Lighting Pass**: Deferred point and directional lighting with HDR.
-- **Blit Pass**: Screen-space tone mapping and final output.
+| Phase | Description |
+| :--- | :--- |
+| **Geometry Pass** | Populates the G-Buffer (Albedo, Normal, MetalRough, Velocity, Depth). |
+| **Compute Jobs** | GPU compute tasks for physics, spatial acceleration, or logic. |
+| **Grid Pass** | Procedural overlay integrated directly into the depth-tested geometry pass. |
+| **Lighting Pass** | High-performance deferred lighting with HDR and multi-channel synchronization. |
+| **Blit & Post** | Screen-space tone mapping and final framebuffer output. |
 
-## 🛠️ Getting Started
+---
+
+## 🚀 Getting Started
 
 ### Installation
 ```bash
+# Clone and install dependencies
+git clone https://github.com/Aniket9rana/Null-Graph-Engine.git
+cd null-graph-engine
 npm install
 ```
 
-### Dev Server
+### Development
 ```bash
+# Launch the interactive editor with Vite
 npm run dev
 ```
 
-### Build for Production
+### Production Build
 ```bash
+# Generate optimized assets and distribution files
 npm run build
 ```
+
+---
 
 ## 📜 Usage Example
 
 ```typescript
-import { Engine, Scene, Mesh, ObjLoader } from 'null-graph-engine';
+import { Engine, Scene, Mesh, ObjLoader, ECS } from 'null-graph-engine';
 
 const engine = new Engine(canvas);
 await engine.init();
 
 const scene = new Scene();
-const mesh = new Mesh({ 
-    geometry: await ObjLoader.load('./model.obj'),
-    color: [1, 1, 1, 1] 
-});
+const entity = ECS.createEntity();
 
-scene.add(mesh);
+// High-speed asset loading
+const geometry = await ObjLoader.load('./assets/models/starship.obj');
+
+scene.add(new Mesh({ 
+    geometry,
+    color: [0.4, 0.6, 1.0, 1.0], // Neon Blue
+    metallic: 0.8,
+    roughness: 0.2
+}));
+
 engine.run((dt) => {
     engine.renderer.render(scene);
 });
 ```
 
+---
+
 ## 🤝 Contributing
-Contributions are welcome! Please feel free to submit a Pull Request.
+The Null Graph Engine is an open-source project. We welcome contributions to the core renderer, asset pipeline, and editor tools. See the `Contributing.md` for more details.
 
 ---
-Created by [Aniket Rana](https://github.com/Aniket9rana). Built for the future of the web.
+
+**Built by [Aniket Rana](https://github.com/Aniket9rana)** • *Standardizing the Future of 3D Web Rendering.*
