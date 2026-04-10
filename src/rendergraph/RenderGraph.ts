@@ -9,11 +9,13 @@ export interface VirtualTextureDesc {
   usage: GPUTextureUsageFlags;
   mips?: number;
   layers?: number;
+  persistence?: 'transient' | 'persistent';
 }
 
 export interface VirtualBufferDesc {
     size: number;
     usage: GPUBufferUsageFlags;
+    persistence?: 'transient' | 'persistent';
 }
 
 export interface PassContext {
@@ -50,14 +52,29 @@ export class RenderGraph {
     private passes: Pass[] = [];
     private resources: VirtualResource[] = [];
     private compiledOrder: number[] = [];
+    private isDirty: boolean = true;
 
-    private realTextures: Map<ResourceHandle, GPUTexture> = new Map();
-    private realBuffers: Map<ResourceHandle, GPUBuffer> = new Map();
+    // Object Pooling for transient memory reuse
+    private texturePool: Map<string, GPUTexture[]> = new Map();
+    private bufferPool: Map<string, GPUBuffer[]> = new Map();
+
+    private activeTextures: Map<ResourceHandle, GPUTexture> = new Map();
+    private activeBuffers: Map<ResourceHandle, GPUBuffer> = new Map();
+
+    private persistentTextures: Map<ResourceHandle, GPUTexture> = new Map();
+    private persistentBuffers: Map<ResourceHandle, GPUBuffer> = new Map();
+
     private resourceNames: Map<string, ResourceHandle> = new Map();
+    private resourceLifespans: Map<ResourceHandle, number> = new Map(); // Death pass (compiled index)
+
+    private lastCanvasWidth = 0;
+    private lastCanvasHeight = 0;
 
     constructor(device: GPUDevice, canvas: HTMLCanvasElement) {
         this.device = device;
         this.canvas = canvas;
+        this.lastCanvasWidth = canvas.width;
+        this.lastCanvasHeight = canvas.height;
     }
 
     addPass(name: string, desc: PassDescriptor): PassHandle {
@@ -68,6 +85,7 @@ export class RenderGraph {
             reads: desc.reads,
             writes: desc.writes,
         });
+        this.isDirty = true;
         return handle;
     }
 
@@ -76,8 +94,9 @@ export class RenderGraph {
             throw new Error(`Resource with name ${name} already exists.`);
         }
         const handle = this.resources.length as ResourceHandle;
-        this.resources.push({ type: 'texture', name, ...desc });
+        this.resources.push({ type: 'texture', name, persistence: 'transient', ...desc });
         this.resourceNames.set(name, handle);
+        this.isDirty = true;
         return handle;
     }
 
@@ -86,12 +105,18 @@ export class RenderGraph {
             throw new Error(`Resource with name ${name} already exists.`);
         }
         const handle = this.resources.length as ResourceHandle;
-        this.resources.push({ type: 'buffer', name, ...desc });
+        this.resources.push({ type: 'buffer', name, persistence: 'transient', ...desc });
         this.resourceNames.set(name, handle);
+        this.isDirty = true;
         return handle;
     }
 
     compile(): void {
+        // Cache compilation if nothing has changed structurally
+        if (!this.isDirty && this.compiledOrder.length > 0) {
+            return; 
+        }
+
         const passCount = this.passes.length;
         const resourceRead: Map<ResourceHandle, number[]> = new Map();
         const resourceWrite: Map<ResourceHandle, number> = new Map();
@@ -112,8 +137,6 @@ export class RenderGraph {
 
         // 1. Cull unused passes by working backwards from passes with side effects.
         const finalPasses = this.passes.map((_, i) => i).filter(passIndex => {
-            // A pass is considered "final" if any of its outputs are not read by any other pass.
-            // This is a heuristic for now. A better system might have explicit 'final' resource marking.
             return this.passes[passIndex].writes.some(resourceHandle => {
                 const readers = resourceRead.get(resourceHandle) || [];
                 return readers.length === 0;
@@ -121,8 +144,6 @@ export class RenderGraph {
         });
 
         if (finalPasses.length === 0 && this.passes.length > 0) {
-             // If no pass has unread outputs, something is likely wrong, or it's a simple chain.
-             // As a fallback, we can assume the last added pass is the one we care about.
             finalPasses.push(this.passes.length - 1);
         }
 
@@ -136,7 +157,6 @@ export class RenderGraph {
             }
             usedPasses.add(passIndex);
 
-            // Add the writers of the resources this pass reads to the queue.
             const pass = this.passes[passIndex];
             for (const resourceHandle of pass.reads) {
                 const writerPassIndex = resourceWrite.get(resourceHandle);
@@ -162,9 +182,7 @@ export class RenderGraph {
             for (const resource of pass.writes) {
                 const readers = resourceRead.get(resource) || [];
                 for (const readerIndex of readers) {
-                    // Check if the reader is an active pass and there's a dependency.
-                    if(usedPasses.has(readerIndex) && passIndex !== readerIndex) {
-                        // This creates a directed edge from writer (passIndex) to reader (readerIndex).
+                    if (usedPasses.has(readerIndex) && passIndex !== readerIndex) {
                         adj.get(passIndex)!.push(readerIndex);
                         inDegree.set(readerIndex, (inDegree.get(readerIndex) || 0) + 1);
                     }
@@ -192,43 +210,130 @@ export class RenderGraph {
             }
         }
 
-        // 3. Detect read-after-write hazards (cycles).
+        // 3. Detect cycles
         if (this.compiledOrder.length !== activePassIndices.length) {
             throw new Error("Cycle detected in render graph. This indicates a read-after-write hazard where passes have circular dependencies.");
         }
+
+        // 4. Calculate Resource Lifespans for Memory Pooling
+        this.resourceLifespans.clear();
+        for (let i = 0; i < this.compiledOrder.length; i++) {
+            const passIndex = this.compiledOrder[i];
+            const pass = this.passes[passIndex];
+            
+            for (const handle of pass.reads) {
+                this.resourceLifespans.set(handle, i); 
+            }
+            for (const handle of pass.writes) {
+                if (!this.resourceLifespans.has(handle)) {
+                    this.resourceLifespans.set(handle, i); 
+                } else {
+                    this.resourceLifespans.set(handle, Math.max(this.resourceLifespans.get(handle)!, i));
+                }
+            }
+        }
+
+        this.isDirty = false;
+    }
+
+    private getTextureHash(desc: GPUTextureDescriptor): string {
+        const size = desc.size as any;
+        const w = Array.isArray(size) ? size[0] : size.width;
+        const h = Array.isArray(size) ? size[1] : size.height;
+        const d = Array.isArray(size) ? size[2] : size.depthOrArrayLayers;
+        return `${w}_${h}_${d}_${desc.format}_${desc.usage}_${desc.mipLevelCount || 1}`;
+    }
+
+    private getBufferHash(desc: GPUBufferDescriptor): string {
+        return `${desc.size}_${desc.usage}`;
+    }
+
+    public getTexture(handle: ResourceHandle): GPUTexture | undefined {
+        return this.persistentTextures.get(handle) || this.activeTextures.get(handle);
     }
 
     execute(commandEncoder: GPUCommandEncoder): void {
+        this.compile(); // Guaranteed up to date with fast early-out
+
+        // Handle window resizes gracefully to avoid leaking VRAM
+        if (this.canvas.width !== this.lastCanvasWidth || this.canvas.height !== this.lastCanvasHeight) {
+            this.texturePool.forEach(pool => pool.forEach(t => t.destroy()));
+            this.texturePool.clear();
+            
+            // Recreate persistent screen-size textures
+            this.persistentTextures.forEach(t => t.destroy()); 
+            this.persistentTextures.clear();
+            
+            this.lastCanvasWidth = this.canvas.width;
+            this.lastCanvasHeight = this.canvas.height;
+        }
+
         const passContext: PassContext = {
             commandEncoder,
             device: this.device,
             getTexture: (handle: ResourceHandle): GPUTexture => {
-                let texture = this.realTextures.get(handle);
-                if (!texture) {
-                    const resource = this.resources[handle as number];
-                    if (resource.type !== 'texture') {
-                        throw new Error(`Resource ${(handle as number)} is not a texture.`);
+                const resource = this.resources[handle as number];
+                if (resource.type !== 'texture') throw new Error(`Resource ${handle} is not a texture.`);
+                
+                if (resource.persistence === 'persistent') {
+                    let tex = this.persistentTextures.get(handle);
+                    if (!tex) {
+                        const desc = this.resolveTextureDesc(resource);
+                        tex = this.device.createTexture(desc);
+                        tex.label = `[Persistent] ${resource.name}`;
+                        this.persistentTextures.set(handle, tex);
                     }
-                    const desc = this.resolveTextureDesc(resource);
-                    texture = this.device.createTexture(desc);
-                    texture.label = resource.name;
-                    this.realTextures.set(handle, texture);
+                    return tex;
                 }
-                return texture;
+
+                let tex = this.activeTextures.get(handle);
+                if (!tex) {
+                    const desc = this.resolveTextureDesc(resource);
+                    const hash = this.getTextureHash(desc);
+                    const pool = this.texturePool.get(hash);
+                    
+                    if (pool && pool.length > 0) {
+                        tex = pool.pop()!;
+                        tex.label = `[Pooled] ${resource.name}`;
+                    } else {
+                        tex = this.device.createTexture(desc);
+                        tex.label = `[Transient] ${resource.name}`;
+                    }
+                    this.activeTextures.set(handle, tex);
+                }
+                return tex;
             },
             getBuffer: (handle: ResourceHandle): GPUBuffer => {
-                let buffer = this.realBuffers.get(handle);
-                 if (!buffer) {
-                    const resource = this.resources[handle as number];
-                    if (resource.type !== 'buffer') {
-                        throw new Error(`Resource ${(handle as number)} is not a buffer.`);
+                const resource = this.resources[handle as number];
+                if (resource.type !== 'buffer') throw new Error(`Resource ${handle} is not a buffer.`);
+                
+                if (resource.persistence === 'persistent') {
+                    let buffer = this.persistentBuffers.get(handle);
+                    if (!buffer) {
+                        buffer = this.device.createBuffer({
+                            label: `[Persistent] ${resource.name}`,
+                            size: resource.size,
+                            usage: resource.usage
+                        });
+                        this.persistentBuffers.set(handle, buffer);
                     }
-                    buffer = this.device.createBuffer({
-                        label: resource.name,
-                        size: resource.size,
-                        usage: resource.usage
-                    });
-                    this.realBuffers.set(handle, buffer);
+                    return buffer;
+                }
+
+                let buffer = this.activeBuffers.get(handle);
+                if (!buffer) {
+                    const desc = { label: resource.name, size: resource.size, usage: resource.usage };
+                    const hash = this.getBufferHash(desc);
+                    const pool = this.bufferPool.get(hash);
+                    
+                    if (pool && pool.length > 0) {
+                        buffer = pool.pop()!;
+                        buffer.label = `[Pooled] ${resource.name}`;
+                    } else {
+                        buffer = this.device.createBuffer(desc);
+                        buffer.label = `[Transient] ${resource.name}`;
+                    }
+                    this.activeBuffers.set(handle, buffer);
                 }
                 return buffer;
             },
@@ -239,9 +344,46 @@ export class RenderGraph {
             }
         };
 
-        for (const passIndex of this.compiledOrder) {
+        for (let i = 0; i < this.compiledOrder.length; i++) {
+            const passIndex = this.compiledOrder[i];
             const pass = this.passes[passIndex];
+
+            // Wrap each pass in a GPU Debug Marker automatically
+            if (commandEncoder.pushDebugGroup) commandEncoder.pushDebugGroup(pass.name);
+            
             pass.descriptor.execute(passContext);
+            
+            if (commandEncoder.popDebugGroup) commandEncoder.popDebugGroup();
+
+            // Release transient textures that reached end of life
+            for (const handle of this.activeTextures.keys()) {
+                const deathTime = this.resourceLifespans.get(handle);
+                if (deathTime === i) {
+                    const tex = this.activeTextures.get(handle)!;
+                    const resource = this.resources[handle as number] as VirtualTextureDesc & {type: 'texture'};
+                    const hash = this.getTextureHash(this.resolveTextureDesc(resource));
+                    
+                    if (!this.texturePool.has(hash)) this.texturePool.set(hash, []);
+                    this.texturePool.get(hash)!.push(tex);
+                    
+                    this.activeTextures.delete(handle);
+                }
+            }
+
+            // Release transient buffers that reached end of life
+            for (const handle of this.activeBuffers.keys()) {
+                const deathTime = this.resourceLifespans.get(handle);
+                if (deathTime === i) {
+                    const buf = this.activeBuffers.get(handle)!;
+                    const resource = this.resources[handle as number] as VirtualBufferDesc & {type: 'buffer'};
+                    const hash = this.getBufferHash({ size: resource.size, usage: resource.usage });
+                    
+                    if (!this.bufferPool.has(hash)) this.bufferPool.set(hash, []);
+                    this.bufferPool.get(hash)!.push(buf);
+                    
+                    this.activeBuffers.delete(handle);
+                }
+            }
         }
     }
     
@@ -260,13 +402,30 @@ export class RenderGraph {
     }
 
     destroy(): void {
-        this.realTextures.forEach(texture => texture.destroy());
-        this.realBuffers.forEach(buffer => buffer.destroy());
-        this.realTextures.clear();
-        this.realBuffers.clear();
+        // Destroy transient pools
+        this.texturePool.forEach(pool => pool.forEach(t => t.destroy()));
+        this.bufferPool.forEach(pool => pool.forEach(b => b.destroy()));
+        
+        // Destroy active but un-pooled resources
+        this.activeTextures.forEach(texture => texture.destroy());
+        this.activeBuffers.forEach(buffer => buffer.destroy());
+        
+        // Destroy persistent resources
+        this.persistentTextures.forEach(texture => texture.destroy());
+        this.persistentBuffers.forEach(buffer => buffer.destroy());
+
+        this.texturePool.clear();
+        this.bufferPool.clear();
+        this.activeTextures.clear();
+        this.activeBuffers.clear();
+        this.persistentTextures.clear();
+        this.persistentBuffers.clear();
+        
         this.resourceNames.clear();
+        this.resourceLifespans.clear();
         this.passes = [];
         this.resources = [];
         this.compiledOrder = [];
+        this.isDirty = true;
     }
 }

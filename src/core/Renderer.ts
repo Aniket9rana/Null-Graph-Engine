@@ -4,6 +4,7 @@ import { RenderGraph, ResourceHandle } from '../rendergraph/RenderGraph';
 import { RenderBatch } from '../renderer/RenderBatch';
 import { Mesh } from './Mesh';
 import { Geometry } from './Geometry';
+import { Material } from './Material';
 import { createGeometryPass } from '../passes/geometry/GeometryPass';
 import { createSimpleLightingPass } from '../passes/lighting/createSimpleLightingPass';
 import { LightBuffer } from '../passes/lighting/LightBuffer';
@@ -44,8 +45,8 @@ export class Renderer {
     private engine: Engine;
     private renderGraph: RenderGraph | null = null;
     
-    // Geometry batching
-    private geometryBatches = new Map<Geometry, RenderBatch>();
+    // Geometry & Material batching
+    private geometryBatches = new Map<Geometry, Map<Material, RenderBatch>>();
     private activeBatches: RenderBatch[] = [];
     
     private lightBuffer: LightBuffer;
@@ -69,10 +70,14 @@ export class Renderer {
         this.lightBuffer = new LightBuffer(engine.device);
     }
 
-    private getOrCreateBatch(geometry: Geometry): RenderBatch {
-        if (this.geometryBatches.has(geometry)) {
-            return this.geometryBatches.get(geometry)!;
+    private getOrCreateBatch(geometry: Geometry, material: Material): RenderBatch {
+        let matMap = this.geometryBatches.get(geometry);
+        if (!matMap) {
+            matMap = new Map<Material, RenderBatch>();
+            this.geometryBatches.set(geometry, matMap);
         }
+        let batch = matMap.get(material);
+        if (batch) return batch;
 
         const { device } = this.engine;
         const vertexBuffer = device.createBuffer({
@@ -97,15 +102,15 @@ export class Renderer {
         };
 
         const MAX_INSTANCES = 1000;
-        const INSTANCE_STRIDE = 14; 
-        const batch = new RenderBatch(
+        const INSTANCE_STRIDE = 16; 
+        batch = new RenderBatch(
             device,
             [{ buffer: vertexBuffer, layout: vertexLayout }],
             indexBuffer, geometry.indices.length,
             MAX_INSTANCES, INSTANCE_STRIDE,
         );
         
-        this.geometryBatches.set(geometry, batch);
+        matMap.set(material, batch);
         return batch;
     }
 
@@ -140,7 +145,7 @@ export class Renderer {
         const depthDesc = { format: 'depth32float' as GPUTextureFormat, width: 'full' as const, height: 'full' as const, usage: tUsage };
         const metalRoughDesc = { format: 'rgba8unorm' as GPUTextureFormat, width: 'full' as const, height: 'full' as const, usage: tUsage };
         const velocityDesc = { format: 'rgba16float' as GPUTextureFormat, width: 'full' as const, height: 'full' as const, usage: tUsage };
-        const hdrDesc = { format: 'rgba16float' as GPUTextureFormat, width: 'full' as const, height: 'full' as const, usage: tUsage };
+        const hdrDesc = { format: 'rgba16float' as GPUTextureFormat, width: 'full' as const, height: 'full' as const, usage: tUsage, persistence: 'persistent' as const };
 
         const hAlbedo = this.renderGraph.addTexture('Albedo', albedoDesc);
         const hNormal = this.renderGraph.addTexture('Normal', normalDesc);
@@ -205,52 +210,70 @@ export class Renderer {
         }
         this.lightBuffer.upload();
 
-        // Sync meshes (Group by Geometry and write to respective RenderBatches)
-        const groups = new Map<Geometry, Mesh[]>();
+        // Sync meshes (Group by Geometry and Material)
+        const groups = new Map<Geometry, Map<Material, Mesh[]>>();
         for (let i = 0; i < scene.meshes.length; i++) {
             const m = scene.meshes[i];
-            let list = groups.get(m.geometry);
+            
+            // Frustum Culling
+            const maxScale = Math.max(m.scale[0], Math.max(m.scale[1], m.scale[2]));
+            const worldRadius = m.geometry.boundingSphereRadius * maxScale;
+            if (!scene.camera.isSphereInFrustum(m.position, worldRadius)) {
+                continue; // Cull invisible geometry
+            }
+
+            let matMap = groups.get(m.geometry);
+            if (!matMap) {
+                matMap = new Map<Material, Mesh[]>();
+                groups.set(m.geometry, matMap);
+            }
+            let list = matMap.get(m.material);
             if (!list) {
                 list = [];
-                groups.set(m.geometry, list);
+                matMap.set(m.material, list);
             }
             list.push(m);
         }
 
         this.activeBatches.length = 0;
 
-        for (const [geometry, meshes] of groups) {
-            const batch = this.getOrCreateBatch(geometry);
-            this.activeBatches.push(batch);
+        for (const [geometry, matMap] of groups) {
+            for (const [material, meshes] of matMap) {
+                const batch = this.getOrCreateBatch(geometry, material);
+                this.activeBatches.push(batch);
 
-            const maxInstances = 1000;
-            const instanceCount = Math.min(meshes.length, maxInstances);
-            const instanceData = batch.scratchBuffer;
+                const maxInstances = 1000;
+                const instanceCount = Math.min(meshes.length, maxInstances);
+                const instanceData = batch.scratchBuffer;
 
-            for (let i = 0; i < instanceCount; i++) {
-                const m = meshes[i];
-                const offset = i * 14;
-                
-                instanceData[offset + 0] = m.position[0];
-                instanceData[offset + 1] = m.position[1];
-                instanceData[offset + 2] = m.position[2];
-                
-                instanceData[offset + 3] = m.rotation[0];
-                instanceData[offset + 4] = m.rotation[1];
-                instanceData[offset + 5] = m.rotation[2];
-                instanceData[offset + 6] = m.rotation[3];
-                
-                instanceData[offset + 7] = m.scale[0];
-                instanceData[offset + 8] = m.scale[1];
-                instanceData[offset + 9] = m.scale[2];
-                
-                instanceData[offset + 10] = m.color[0];
-                instanceData[offset + 11] = m.color[1];
-                instanceData[offset + 12] = m.color[2];
-                instanceData[offset + 13] = m.color[3];
+                for (let i = 0; i < instanceCount; i++) {
+                    const m = meshes[i];
+                    const offset = i * 16;
+                    
+                    instanceData[offset + 0] = m.position[0];
+                    instanceData[offset + 1] = m.position[1];
+                    instanceData[offset + 2] = m.position[2];
+                    
+                    instanceData[offset + 3] = m.rotation[0];
+                    instanceData[offset + 4] = m.rotation[1];
+                    instanceData[offset + 5] = m.rotation[2];
+                    instanceData[offset + 6] = m.rotation[3];
+                    
+                    instanceData[offset + 7] = m.scale[0];
+                    instanceData[offset + 8] = m.scale[1];
+                    instanceData[offset + 9] = m.scale[2];
+                    
+                    instanceData[offset + 10] = m.material.color[0];
+                    instanceData[offset + 11] = m.material.color[1];
+                    instanceData[offset + 12] = m.material.color[2];
+                    instanceData[offset + 13] = m.material.color[3];
+                    
+                    instanceData[offset + 14] = m.material.metallic;
+                    instanceData[offset + 15] = m.material.roughness;
+                }
+                batch.instanceCount = instanceCount;
+                batch.updateInstances(instanceData);
             }
-            batch.instanceCount = instanceCount;
-            batch.updateInstances(instanceData);
         }
 
         // Execute render graph
@@ -258,7 +281,7 @@ export class Renderer {
         this.renderGraph!.execute(commandEncoder);
 
         if (!this.blitBG) {
-            const hdrTexture = this.renderGraph!['realTextures'].get(this.hHDRHandle)!;
+            const hdrTexture = this.renderGraph!.getTexture(this.hHDRHandle)!;
             this.blitBG = device.createBindGroup({
                 layout: this.blitBGL,
                 entries: [

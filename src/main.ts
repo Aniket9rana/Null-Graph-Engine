@@ -245,7 +245,7 @@ async function main() {
       sz.value = m.scale[2].toFixed(2);
 
       const col = document.getElementById('t-color') as HTMLInputElement;
-      col.value = rgbToHex(m.color[0], m.color[1], m.color[2]);
+      col.value = rgbToHex(m.material.color[0], m.material.color[1], m.material.color[2]);
     } else {
       transformEmpty.style.display = 'block';
       transformEditor.style.display = 'none';
@@ -279,7 +279,7 @@ async function main() {
     if (selectedMesh) {
       const hex = (e.target as HTMLInputElement).value;
       const rgb = hexToRgb(hex);
-      selectedMesh.color = [rgb[0], rgb[1], rgb[2], 1.0];
+      selectedMesh.material.color = [rgb[0], rgb[1], rgb[2], 1.0];
     }
   });
 

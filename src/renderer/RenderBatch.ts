@@ -38,12 +38,12 @@ export class RenderBatch {
                 arrayStride: instanceStride * 4,
                 stepMode: 'instance',
                 attributes: [
-                    // This layout needs to be kept in sync with the instance data structure.
-                    // pos (3), rot (4), scale (3), color (4) = 14 floats
+                    // pos (3), rot (4), scale (3), color (4), pbr (2) = 16 floats
                     { shaderLocation: 3, offset: 0, format: 'float32x3' }, // pos
                     { shaderLocation: 4, offset: 12, format: 'float32x4' }, // rot
                     { shaderLocation: 5, offset: 28, format: 'float32x3' }, // scale
                     { shaderLocation: 6, offset: 40, format: 'float32x4' }, // color
+                    { shaderLocation: 7, offset: 56, format: 'float32x2' }, // pbr
                 ],
             },
         });

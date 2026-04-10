@@ -11,6 +11,7 @@ struct InstanceInput {
     @location(4) instance_rot: vec4<f32>, // Quaternion
     @location(5) instance_scale: vec3<f32>,
     @location(6) instance_color: vec4<f32>,
+    @location(7) instance_pbr: vec2<f32>, // x: metallic, y: roughness
 };
 
 struct VSOutput {
@@ -19,6 +20,7 @@ struct VSOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) color: vec4<f32>,
+    @location(4) pbr: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: mat4x4<f32>; // View-projection matrix
@@ -81,6 +83,7 @@ fn vs_main(vert: VertexInput, instance: InstanceInput) -> VSOutput {
     out.uv = vert.uv;
     out.clip_position = camera * world_pos_4;
     out.color = instance.instance_color;
+    out.pbr = instance.instance_pbr;
     return out;
 }
 
@@ -97,7 +100,7 @@ fn fs_main(in: VSOutput) -> GBufferOutput {
     
     out.albedo = in.color; // Use instance color for albedo
     out.normal = vec4<f32>(normalize(in.world_normal), 0.0);
-    out.metalRough = vec4<f32>(0.1, 0.8, 0.0, 0.0); // low metallic, high roughness
+    out.metalRough = vec4<f32>(in.pbr.x, in.pbr.y, 0.0, 0.0);
     out.velocity = vec4<f32>(0.0, 0.0, 0.0, 0.0);   // No velocity yet
     return out;
 }

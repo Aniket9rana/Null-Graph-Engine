@@ -2,6 +2,7 @@ export { Engine } from './core/Engine';
 export { Renderer } from './core/Renderer';
 export { Scene } from './core/Scene';
 export { Mesh } from './core/Mesh';
+export { Material } from './core/Material';
 export { PointLight, DirectionalLight } from './core/Lights';
 export type { AnyLight } from './core/Lights';
 
